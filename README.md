@@ -16,7 +16,7 @@ Download the binary from the release and run it. (Support on systemctl soon)
 
 **`-p`** path of the directory containing Dockerfile and pod.yaml (The names must be same as mentioned).
 
-**`-i`** name of the docker image (built if not available) to be used (make sure that the shell is pointing to the k8s' docker daemon).
+**`-i`** name of the docker image (built if not available) to be used (make sure that the shell you ran podwiz_client into is pointing to the k8s' docker daemon).
 
 **`-sn`** name of the schedule.
 
