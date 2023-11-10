@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: '%name%'
+spec:
+  containers:
+  - name: '%name%'
+    image: '%image%:latest'
+    command: ['sh', '-c', "service ssh restart && echo 'level1:%password%' | chpasswd && sleep infinity"]
+    imagePullPolicy: Never
+    ports:
+    - containerPort: 22
