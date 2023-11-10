@@ -1,5 +1,13 @@
 # podwiz
 
+## Why ?
+
+Sometimes we need a quick shell to do some things and later dont need it or in many CTFs and tutorials we need to provide unique shell to user, podwiz makes these very easy!
+
+One can use go [package](https://github.com/Atish03/go_podwiz) to deploy shells Programmatically.
+
+podwiz uses kubernetes to start a pod using image provided in options.
+
 ## podwiz_client
 
 Download the binary from the release and run it. (Support on systemctl soon)
