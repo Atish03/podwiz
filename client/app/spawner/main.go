@@ -88,7 +88,7 @@ func (user *User) Delete() {
 
 func (client *Client) CreateUser(username string, podName string, podFile string, image string) User {
 	var password string = randSeq(15)
-	randomShellName := podName + randName(6)
+	randomShellName := podName + randName(12)
 
 	user := User {
 		Username: username,
