@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/Atish03/podwiz/app/spawner"
 	"net"
-	"log"
+	// "log"
 	"os"
 	"syscall"
 	"os/signal"
@@ -38,8 +38,24 @@ type ToSend struct {
 	Data []byte `json:data`
 }
 
+type ClientError struct {
+	Err string
+}
+
+type InternalError struct {
+	Err string
+}
+
+func (e *ClientError) Error() string {
+	return fmt.Sprintf("%v: client error", e.Err)
+}
+
+func (e *InternalError) Error() string {
+	return fmt.Sprintf("parse %v: internal error", e.Err)
+}
+
 func main() {
-	client := spawner.GetClient()
+	client, err := spawner.GetClient()
 	allSchedules := []*spawner.Scheduler{}
 
 	creator := Creator {
@@ -50,7 +66,8 @@ func main() {
 	os.Remove("/tmp/podwiz.sock")
 	socket, err := net.Listen("unix", "/tmp/podwiz.sock")
 	if err != nil {
-        log.Fatal(err)
+        fmt.Println(err.Error())
+		return
     }
 
 	c := make(chan os.Signal, 1)
@@ -64,45 +81,56 @@ func main() {
 	for {
         conn, err := socket.Accept()
         if err != nil {
-            log.Fatal(err)
-        }
+            fmt.Println(err)
+        } else {
+			go func(conn net.Conn) {
+				defer conn.Close()
+				buf := make([]byte, 4096)
 
-        go func(conn net.Conn) {
-            defer conn.Close()
-            buf := make([]byte, 4096)
+				_, err := conn.Read(buf)
+				if err == nil {
+					msg := reqProto.Block{}
+					proto.Unmarshal(buf, protoreflect.Message.Interface(msg.ProtoReflect()))
 
-            _, err := conn.Read(buf)
-            if err == nil {
-				msg := reqProto.Block{}
-				proto.Unmarshal(buf, protoreflect.Message.Interface(msg.ProtoReflect()))
-
-				switch {
-				case msg.Command == "start":
-					creds := creator.start(msg.Start.Name, msg.Start.MachineName, msg.Start.Path, msg.Start.ImgName, int(msg.Start.Time), msg.Start.ScheduleName)
-					_, err = conn.Write(creds)
-					if err != nil {
-						log.Fatal(err)
-					}
-				case msg.Command == "list":
-					schedules := creator.list(msg.List.ScheduleName)
-					_, err = conn.Write(schedules)
-					if err != nil {
-						log.Fatal(err)
-					}
-				default:
-					_, err = conn.Write([]byte("Command is not listed!"))
-					if err != nil {
-						log.Fatal(err)
+					switch {
+					case err != nil:
+						switch e := err.(type) {
+						case *ClientError:
+							_, err = conn.Write([]byte(e.Error()))
+						case *InternalError:
+							fmt.Println(e.Error())
+						}
+					case msg.Command == "start":
+						creds := creator.start(msg.Start.Name, msg.Start.MachineName, msg.Start.Path, msg.Start.ImgName, int(msg.Start.Time), msg.Start.ScheduleName)
+						_, err = conn.Write(creds)
+						if err != nil {
+							fmt.Println(err.Error())
+						}
+					case msg.Command == "list":
+						schedules := creator.list(msg.List.ScheduleName)
+						_, err = conn.Write(schedules)
+						if err != nil {
+							fmt.Println(err.Error())
+						}
+					default:
+						_, err = conn.Write([]byte("Command is not listed!"))
+						if err != nil {
+							fmt.Println(err.Error())
+						}
 					}
 				}
-			}
-        }(conn)
+			}(conn)
+		}
     }
 }
 
 func (creator *Creator) start(name string, machineName string, path string, imgName string, time int, scheduleName string) []byte {
 	s := spawner.New(time, scheduleName)
-	user := creator.client.CreateUser(name, machineName, path, imgName)
+	user, err := creator.client.CreateUser(name, machineName, path, imgName)
+	if err != nil {
+		return []byte(err.Error())
+	}
+
 	go s.Start(&user)
 	creator.schedules = append(creator.schedules, s)
 

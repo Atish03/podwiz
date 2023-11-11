@@ -51,6 +51,22 @@ type Scheduler struct {
 	User *User
 }
 
+type ClientError struct {
+	Err string
+}
+
+type InternalError struct {
+	Err string
+}
+
+func (e *ClientError) Error() string {
+	return fmt.Sprintf("%v: client error", e.Err)
+}
+
+func (e *InternalError) Error() string {
+	return fmt.Sprintf("parse %v: internal error", e.Err)
+}
+
 func init() {
     rand.Seed(time.Now().UnixNano())
 }
@@ -74,19 +90,23 @@ func randName(n int) string {
     return string(b)
 }
 
-func (user *User) Delete() {
+func (user *User) Delete() error {
 	user.Forwarder.Close()
 
 	err := user.Shell.client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Delete(context.TODO(), user.Shell.PodName, metav1.DeleteOptions{})
 	if err != nil {
-		panic(err)
+		return &InternalError {
+			err.Error(),
+		}
 	}
 
 	user.Shell = nil
 	user.Forwarder = nil
+
+	return nil
 }
 
-func (client *Client) CreateUser(username string, podName string, podFile string, image string) User {
+func (client *Client) CreateUser(username string, podName string, podFile string, image string) (User, error) {
 	var password string = randSeq(15)
 	randomShellName := podName + randName(12)
 
@@ -100,24 +120,33 @@ func (client *Client) CreateUser(username string, podName string, podFile string
 		PodName: randomShellName,
 	}
 
-	pod := shell.startPod(podFile, password, randomShellName, image)
+	pod, err := shell.startPod(podFile, password, randomShellName, image)
+	if err != nil {
+		return User{}, err
+	}
+
 	shell.pod = pod
-	forwarder := shell.forwardPod()
+	forwarder, err := shell.forwardPod()
+	if err != nil {
+		return User{}, err
+	}
 
 	user.Shell = &shell
 	user.Forwarder = forwarder
 
 	ports, err := user.Forwarder.GetPorts()
 	if err != nil {
-		panic(err)
+		return User{}, &InternalError {
+			err.Error(),
+		}
 	}
 
 	user.Port = ports[0].Local
 
-	return user
+	return user, nil
 }
 
-func GetClient() Client {
+func GetClient() (Client, error) {
 	var kubeconfig *string
 	if home := homedir.HomeDir(); home != "" {
 		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "")
@@ -128,12 +157,16 @@ func GetClient() Client {
 	
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
-		panic(err)
+		return Client{}, &ClientError {
+			"k8s is not correctly configured, make sure that .kube exists in home dierctory",
+		}
 	}
 	
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		panic(err)
+		return Client{}, &InternalError {
+			err.Error(),
+		}
 	}
 
 	client := Client {
@@ -141,15 +174,17 @@ func GetClient() Client {
 		clientset: clientset,
 	}
 
-	return client
+	return client, nil
 }
 
-func (shell *ShellPod) startPod(path string, password string, name string, image string) *apiv1.Pod {
+func (shell *ShellPod) startPod(path string, password string, name string, image string) (*apiv1.Pod, error) {
 	client := shell.client
 
 	dat, err := os.ReadFile(path + "/pod.yaml")
 	if err != nil {
-		panic(err)
+		return nil, &ClientError {
+			err.Error(),
+		}
 	}
 
 	dat = bytes.ReplaceAll(dat, []byte("%password%"), []byte(password))
@@ -159,42 +194,46 @@ func (shell *ShellPod) startPod(path string, password string, name string, image
 	pod := &apiv1.Pod{}
 	err = yaml.Unmarshal(dat, pod)
 	if err != nil {
-		panic(err)
+		return nil, &ClientError {
+			"Cannot parse yaml file, please check the syntax\n" + err.Error(),
+		}
 	}
 
-	pod, err = client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Create(context.TODO(), pod, metav1.CreateOptions{})
+	imgExists, err := builder.ImageExists(image)
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+
+	if imgExists {
+		pod, err = client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Create(context.TODO(), pod, metav1.CreateOptions{})
+		if err != nil {
+			return nil, &InternalError {
+				err.Error(),
+			}
+		}
+	} else {
+		err = builder.Build(path, image)
+		if err != nil {
+			panic(err)
+		}
+
+		pod, err = client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Create(context.TODO(), pod, metav1.CreateOptions{})
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	for {
 		createdPod, err := client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Get(context.TODO(), shell.PodName, metav1.GetOptions{})
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		if len(createdPod.Status.ContainerStatuses) > 0 {
 			if (createdPod.Status.ContainerStatuses[0].State.Waiting != nil && createdPod.Status.ContainerStatuses[0].State.Waiting.Reason == "ErrImageNeverPull") {
-				fmt.Printf("Cannot find %s, building from Dockerfile", image)
-				err := client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Delete(context.TODO(), shell.PodName, metav1.DeleteOptions{})
-				if err != nil {
-					panic(err)
-				}
-
-				err = builder.Build(path, image)
-				if err != nil {
-					panic(err)
-				}
-
-				pod = &apiv1.Pod{}
-				err = yaml.Unmarshal(dat, pod)
-				if err != nil {
-					panic(err)
-				}
-
-				pod, err = client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Create(context.TODO(), pod, metav1.CreateOptions{})
-				if err != nil {
-					panic(err)
+				client.clientset.CoreV1().Pods(apiv1.NamespaceDefault).Delete(context.TODO(), shell.PodName, metav1.DeleteOptions{})
+				return nil, &ClientError {
+					fmt.Sprintf("Cannot find %s, make sure shell is pointing to docker-daemon of k8s", image),
 				}
 			}
 		}
@@ -204,15 +243,15 @@ func (shell *ShellPod) startPod(path string, password string, name string, image
 		}
 	}
 
-	return pod
+	return pod, nil
 }
 
-func (shell *ShellPod) forwardPod() *portforward.PortForwarder {
+func (shell *ShellPod) forwardPod() (*portforward.PortForwarder, error) {
 	client := shell.client
 
 	roundTripper, upgrader, err := spdy.RoundTripperFor(client.config)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", shell.pod.Namespace, shell.PodName)
@@ -227,7 +266,7 @@ func (shell *ShellPod) forwardPod() *portforward.PortForwarder {
 
 	forwarder, err := portforward.New(dialer, []string{":22"}, stopChan, readyChan, out, errOut)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	
 	go forwarder.ForwardPorts()
@@ -235,7 +274,7 @@ func (shell *ShellPod) forwardPod() *portforward.PortForwarder {
 	for range readyChan {
 	}
 
-	return forwarder
+	return forwarder, nil
 }
 
 func New(time int, name string) *Scheduler {
@@ -246,7 +285,7 @@ func New(time int, name string) *Scheduler {
 	return &s
 }
 
-func (s *Scheduler) Start(toKill *User) {
+func (s *Scheduler) Start(toKill *User) error {
 	s.User = toKill
 	s.StartTime = time.Now().Unix()
 	s.EndTime = s.StartTime + int64(s.period)
@@ -258,10 +297,14 @@ func (s *Scheduler) Start(toKill *User) {
 	}
 
 	fmt.Println("Deleting", s.Name)
-	s.User.Delete()
+	err := s.User.Delete()
+	if err != nil {
+		return err
+	}
+
 	s.User = nil
 	*s = Scheduler{}
-	return
+	return nil
 }
 
 func (s *Scheduler) AddTime(time int) {

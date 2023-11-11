@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/archive"
 )
@@ -36,6 +37,27 @@ func Build(filePath string, imageName string) error {
 	}
 
 	return nil
+}
+func ImageExists(image string) (bool, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return false, err
+	}
+
+	filters := filters.NewArgs()
+	filters.Add("reference", image + ":latest")
+
+	opts := types.ImageListOptions {
+		Filters: filters,
+	}
+
+	imgs, err := cli.ImageList(context.Background(), opts)
+
+	if len(imgs) == 1 {
+		return true, nil
+	}
+
+	return false, nil
 }
 
 func imageBuild(dockerClient *client.Client, filePath string, imageName string) error {

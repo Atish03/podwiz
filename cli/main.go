@@ -24,6 +24,9 @@ type ScheduleInfo struct {
 
 func main() {
 	conn := podwiz.Connect()
+	if conn == nil {
+		return
+	}
 
 	var out []byte
 
@@ -79,9 +82,10 @@ func main() {
 				creds := Creds{}
 				err := json.Unmarshal(out, &creds)
 				if err != nil {
-					fmt.Println("Server didnt send correct data!")
+					fmt.Println(string(out))
+				} else {
+					fmt.Printf("Username: %s\nPassword: %s\nPort: %d\n", creds.Username, creds.Password, creds.Port)
 				}
-				fmt.Printf("Username: %s\nPassword: %s\nPort: %d\n", creds.Username, creds.Password, creds.Port)
 			} else {
 				return
 			}
@@ -90,7 +94,7 @@ func main() {
 			schedules := []ScheduleInfo{}
 			err := json.Unmarshal(out, &schedules)
 			if err != nil {
-				fmt.Println("Server didnt send correct data!")
+				fmt.Println(err.Error())
 			}
 			toShow := [][]string{}
 			for i := 0; i < len(schedules); i++ {
